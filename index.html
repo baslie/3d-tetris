@@ -40,16 +40,95 @@
       pointer-events: none;
       user-select: none;
     }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      font-family: sans-serif;
+      color: #fff;
+    }
+    .overlay h1 {
+      font-size: 48px;
+      margin-bottom: 24px;
+      letter-spacing: 4px;
+      text-shadow: 0 0 20px rgba(74, 158, 255, 0.8);
+    }
+    .overlay p {
+      color: rgba(255,255,255,0.6);
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    .overlay-btn {
+      margin-top: 24px;
+      padding: 14px 48px;
+      font-size: 18px;
+      font-family: sans-serif;
+      color: #fff;
+      background: transparent;
+      border: 2px solid #4a9eff;
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 2px;
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .overlay-btn:hover {
+      background: rgba(74, 158, 255, 0.2);
+      box-shadow: 0 0 16px rgba(74, 158, 255, 0.4);
+    }
+    #controls-help {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      color: rgba(255,255,255,0.35);
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      pointer-events: none;
+      user-select: none;
+      z-index: 5;
+    }
   </style>
 </head>
 <body>
-  <div id="preview"><canvas id="preview-canvas"></canvas></div>
-  <div id="preview-label">NEXT</div>
-  <div id="score-panel">
+  <!-- Оверлеи -->
+  <div id="start-screen" class="overlay">
+    <h1>3D TETRIS</h1>
+    <p>Стрелки — движение &nbsp; Q/E — поворот Y</p>
+    <p>R/F — поворот X &nbsp; Пробел — сброс</p>
+    <p>Shift — ускорение &nbsp; Esc — пауза</p>
+    <button class="overlay-btn" onclick="startGame()">СТАРТ</button>
+  </div>
+  <div id="pause-screen" class="overlay" style="display:none">
+    <h1>ПАУЗА</h1>
+    <button class="overlay-btn" onclick="resumeGame()">ПРОДОЛЖИТЬ</button>
+  </div>
+  <div id="gameover-screen" class="overlay" style="display:none">
+    <h1>GAME OVER</h1>
+    <p style="font-size:22px;color:#4a9eff;margin-bottom:4px">Счёт: <span id="final-score">0</span></p>
+    <button class="overlay-btn" onclick="resetGame()">ИГРАТЬ СНОВА</button>
+  </div>
+
+  <div id="preview" style="display:none"><canvas id="preview-canvas"></canvas></div>
+  <div id="preview-label" style="display:none">NEXT</div>
+  <div id="score-panel" style="display:none">
     <div>SCORE: <span id="score-value">0</span></div>
     <div>LINES: <span id="lines-value">0</span></div>
   </div>
   <canvas id="c"></canvas>
+  <div id="controls-help" style="display:none">
+    ← → ↑ ↓ — движение<br>
+    Q / E — поворот Y<br>
+    R / F — поворот X<br>
+    Space — сброс вниз<br>
+    Shift — ускорение<br>
+    Esc — пауза<br>
+    H — скрыть подсказки
+  </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -134,6 +213,10 @@
       { blocks: [[0,0,0],[1,0,0],[0,0,1],[1,0,1]], color: 0xf0f000 }, // O
     ];
 
+    // --- Состояние игры ---
+    let gameState = 'start'; // 'start' | 'playing' | 'paused' | 'gameover'
+    let ghostGroup = null;
+
     // --- Состояние текущей фигуры ---
     let currentPiece = null;
     let currentPosition = { x: 0, y: 0, z: 0 };
@@ -179,6 +262,7 @@
         currentPosition.z + 0.5
       );
       scene.add(currentGroup);
+      renderGhost();
     }
 
     // --- Превью следующей фигуры ---
@@ -230,10 +314,14 @@
       currentPosition.x = Math.floor((FIELD.W - bounds.w) / 2);
       currentPosition.z = Math.floor((FIELD.D - bounds.d) / 2);
       currentPosition.y = FIELD.H - bounds.h;
+      if (!canPlace(currentPiece, currentPosition)) {
+        currentPiece = null;
+        gameOver();
+        return;
+      }
       renderCurrentPiece();
       renderNextPreview();
     }
-    spawnPiece();
 
     // --- Хранилище мешей зафиксированных блоков ---
     const blockMeshes = [];
@@ -299,6 +387,7 @@
       });
       if (currentGroup) scene.remove(currentGroup);
       currentGroup = null;
+      if (ghostGroup) { scene.remove(ghostGroup); ghostGroup = null; }
       currentPiece = null;
       checkAndClearLayers();
     }
@@ -386,6 +475,89 @@
       spawnPiece();
     }
 
+    // --- Ghost piece ---
+    function renderGhost() {
+      if (ghostGroup) { scene.remove(ghostGroup); ghostGroup = null; }
+      if (!currentPiece) return;
+      // Найти самую низкую валидную позицию
+      const ghostPos = { ...currentPosition };
+      while (true) {
+        const next = { x: ghostPos.x, y: ghostPos.y - 1, z: ghostPos.z };
+        if (!canPlace(currentPiece, next)) break;
+        ghostPos.y = next.y;
+      }
+      // Не рисовать ghost на той же позиции
+      if (ghostPos.y === currentPosition.y) return;
+      ghostGroup = new THREE.Group();
+      currentPiece.blocks.forEach(([dx, dy, dz]) => {
+        const geo = new THREE.BoxGeometry(1, 1, 1);
+        const mat = new THREE.MeshLambertMaterial({
+          color: currentPiece.color,
+          transparent: true,
+          opacity: 0.2,
+        });
+        const cube = new THREE.Mesh(geo, mat);
+        cube.position.set(dx, dy, dz);
+        ghostGroup.add(cube);
+      });
+      ghostGroup.position.set(ghostPos.x + 0.5, ghostPos.y + 0.5, ghostPos.z + 0.5);
+      scene.add(ghostGroup);
+    }
+
+    // --- Управление состоянием игры ---
+    function startGame() {
+      document.getElementById('start-screen').style.display = 'none';
+      document.getElementById('preview').style.display = '';
+      document.getElementById('preview-label').style.display = '';
+      document.getElementById('score-panel').style.display = '';
+      document.getElementById('controls-help').style.display = 'block';
+      score = 0;
+      totalLines = 0;
+      dropInterval = 1000;
+      updateHUD();
+      gameState = 'playing';
+      lastDropTime = performance.now();
+      spawnPiece();
+    }
+
+    function pauseGame() {
+      document.getElementById('pause-screen').style.display = '';
+      gameState = 'paused';
+    }
+
+    function resumeGame() {
+      document.getElementById('pause-screen').style.display = 'none';
+      gameState = 'playing';
+      lastDropTime = performance.now();
+    }
+
+    function gameOver() {
+      if (ghostGroup) { scene.remove(ghostGroup); ghostGroup = null; }
+      if (currentGroup) { scene.remove(currentGroup); currentGroup = null; }
+      document.getElementById('final-score').textContent = score;
+      document.getElementById('gameover-screen').style.display = '';
+      gameState = 'gameover';
+    }
+
+    function resetGame() {
+      document.getElementById('gameover-screen').style.display = 'none';
+      // Очистить поле
+      for (let x = 0; x < FIELD.W; x++) {
+        for (let y = 0; y < FIELD.H; y++) {
+          for (let z = 0; z < FIELD.D; z++) {
+            fieldGrid[x][y][z] = null;
+            if (blockMeshes[x][y][z]) {
+              scene.remove(blockMeshes[x][y][z]);
+              blockMeshes[x][y][z] = null;
+            }
+          }
+        }
+      }
+      currentPiece = null;
+      nextPiece = null;
+      startGame();
+    }
+
     // --- Игровой цикл ---
     let dropInterval = 1000;
     let lastDropTime = performance.now();
@@ -403,7 +575,7 @@
     }
 
     function gameTick(now) {
-      if (animating || !currentPiece) return;
+      if (gameState !== 'playing' || animating || !currentPiece) return;
       const interval = softDrop ? dropInterval / 4 : dropInterval;
       if (now - lastDropTime >= interval) {
         if (!tryMove(0, -1, 0)) lockPiece();
@@ -413,7 +585,20 @@
 
     // --- Управление клавиатурой ---
     window.addEventListener('keydown', (e) => {
-      if (animating || !currentPiece) return;
+      // Toggle подсказок
+      if (e.code === 'KeyH') {
+        const help = document.getElementById('controls-help');
+        help.style.display = help.style.display === 'none' ? 'block' : 'none';
+        return;
+      }
+      // Пауза
+      if (e.code === 'Escape') {
+        if (gameState === 'playing') pauseGame();
+        else if (gameState === 'paused') resumeGame();
+        return;
+      }
+      // Игровые клавиши только в playing
+      if (gameState !== 'playing' || animating || !currentPiece) return;
       switch (e.code) {
         case 'ArrowLeft':  tryMove(-1, 0, 0); break;
         case 'ArrowRight': tryMove(1, 0, 0); break;
