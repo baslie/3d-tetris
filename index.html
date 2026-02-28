@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Tetris</title>
+  <style>
+    * { margin: 0; padding: 0; }
+    html, body { overflow: hidden; width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script>
+    // --- Сцена ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a2e);
+
+    // --- Камера ---
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(8, 10, 8);
+
+    // --- Рендерер ---
+    const canvas = document.getElementById('c');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+
+    // --- OrbitControls ---
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.set(3, 6, 3);
+    controls.minPolarAngle = 0.1;
+    controls.maxPolarAngle = Math.PI / 2 - 0.05;
+    controls.update();
+
+    // --- Платформа 6×6 (сетка линий на y=0) ---
+    const gridPositions = [];
+
+    // Линии вдоль X (при разных z)
+    for (let z = 0; z <= 6; z++) {
+      gridPositions.push(0, 0, z, 6, 0, z);
+    }
+    // Линии вдоль Z (при разных x)
+    for (let x = 0; x <= 6; x++) {
+      gridPositions.push(x, 0, 0, x, 0, 6);
+    }
+
+    const gridGeometry = new THREE.BufferGeometry();
+    gridGeometry.setAttribute('position', new THREE.Float32BufferAttribute(gridPositions, 3));
+    const gridMaterial = new THREE.LineBasicMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.5 });
+    const grid = new THREE.LineSegments(gridGeometry, gridMaterial);
+    scene.add(grid);
+
+    // --- Границы поля (wireframe-куб 6×6×12) ---
+    const boxGeometry = new THREE.BoxGeometry(6, 12, 6);
+    const edgesGeometry = new THREE.EdgesGeometry(boxGeometry);
+    const edgesMaterial = new THREE.LineBasicMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.2 });
+    const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
+    edges.position.set(3, 6, 3);
+    scene.add(edges);
+
+    // --- Освещение ---
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(5, 15, 5);
+    scene.add(dirLight);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    // --- Resize ---
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- Animation loop ---
+    function animate() {
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    renderer.setAnimationLoop(animate);
+  </script>
+</body>
+</html>
