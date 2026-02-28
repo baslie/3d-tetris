@@ -29,11 +29,26 @@
       font-family: sans-serif;
       font-size: 12px;
     }
+    #score-panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: rgba(74, 158, 255, 0.9);
+      font-family: sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      pointer-events: none;
+      user-select: none;
+    }
   </style>
 </head>
 <body>
   <div id="preview"><canvas id="preview-canvas"></canvas></div>
   <div id="preview-label">NEXT</div>
+  <div id="score-panel">
+    <div>SCORE: <span id="score-value">0</span></div>
+    <div>LINES: <span id="lines-value">0</span></div>
+  </div>
   <canvas id="c"></canvas>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -285,6 +300,89 @@
       if (currentGroup) scene.remove(currentGroup);
       currentGroup = null;
       currentPiece = null;
+      checkAndClearLayers();
+    }
+
+    // --- Проверка и уничтожение слоёв ---
+    function checkAndClearLayers() {
+      // Собрать заполненные слои
+      const fullLayers = [];
+      for (let y = 0; y < FIELD.H; y++) {
+        let full = true;
+        for (let x = 0; x < FIELD.W && full; x++) {
+          for (let z = 0; z < FIELD.D && full; z++) {
+            if (fieldGrid[x][y][z] === null) full = false;
+          }
+        }
+        if (full) fullLayers.push(y);
+      }
+
+      if (fullLayers.length === 0) {
+        spawnPiece();
+        return;
+      }
+
+      // Подсчёт очков
+      const cnt = fullLayers.length;
+      const pts = cnt === 1 ? 100 : cnt === 2 ? 300 : cnt === 3 ? 600 : 1000;
+      score += pts;
+      totalLines += cnt;
+      dropInterval = 1000 * Math.pow(0.9, Math.floor(totalLines / 5));
+      updateHUD();
+
+      // Запуск анимации уничтожения
+      animating = true;
+      animStartTime = performance.now();
+      animClearedYs = fullLayers;
+      animMeshes = [];
+
+      for (const y of fullLayers) {
+        for (let x = 0; x < FIELD.W; x++) {
+          for (let z = 0; z < FIELD.D; z++) {
+            const mesh = blockMeshes[x][y][z];
+            if (mesh) {
+              mesh.material.color.set(0xffffff);
+              animMeshes.push(mesh);
+            }
+          }
+        }
+      }
+    }
+
+    function finishClearAnimation() {
+      // Удалить меши удалённых слоёв
+      for (const y of animClearedYs) {
+        for (let x = 0; x < FIELD.W; x++) {
+          for (let z = 0; z < FIELD.D; z++) {
+            const mesh = blockMeshes[x][y][z];
+            if (mesh) scene.remove(mesh);
+            blockMeshes[x][y][z] = null;
+            fieldGrid[x][y][z] = null;
+          }
+        }
+      }
+
+      // Сдвиг слоёв вниз — обработка удалённых слоёв снизу вверх
+      const sorted = [...animClearedYs].sort((a, b) => a - b);
+      for (const removedY of sorted) {
+        for (let y = removedY; y < FIELD.H - 1; y++) {
+          for (let x = 0; x < FIELD.W; x++) {
+            for (let z = 0; z < FIELD.D; z++) {
+              fieldGrid[x][y][z] = fieldGrid[x][y + 1][z];
+              fieldGrid[x][y + 1][z] = null;
+              blockMeshes[x][y][z] = blockMeshes[x][y + 1][z];
+              blockMeshes[x][y + 1][z] = null;
+              if (blockMeshes[x][y][z]) {
+                blockMeshes[x][y][z].position.y = y + 0.5;
+              }
+            }
+          }
+        }
+      }
+
+      animMeshes = [];
+      animClearedYs = [];
+      animating = false;
       spawnPiece();
     }
 
@@ -292,9 +390,20 @@
     let dropInterval = 1000;
     let lastDropTime = performance.now();
     let softDrop = false;
+    let score = 0;
+    let totalLines = 0;
+    let animating = false;
+    let animStartTime = 0;
+    let animMeshes = [];
+    let animClearedYs = [];
+
+    function updateHUD() {
+      document.getElementById('score-value').textContent = score;
+      document.getElementById('lines-value').textContent = totalLines;
+    }
 
     function gameTick(now) {
-      if (!currentPiece) return;
+      if (animating || !currentPiece) return;
       const interval = softDrop ? dropInterval / 4 : dropInterval;
       if (now - lastDropTime >= interval) {
         if (!tryMove(0, -1, 0)) lockPiece();
@@ -304,7 +413,7 @@
 
     // --- Управление клавиатурой ---
     window.addEventListener('keydown', (e) => {
-      if (!currentPiece) return;
+      if (animating || !currentPiece) return;
       switch (e.code) {
         case 'ArrowLeft':  tryMove(-1, 0, 0); break;
         case 'ArrowRight': tryMove(1, 0, 0); break;
@@ -339,7 +448,22 @@
 
     // --- Animation loop ---
     function animate(time) {
-      gameTick(time || performance.now());
+      const now = time || performance.now();
+
+      // Анимация уничтожения слоёв
+      if (animating) {
+        const elapsed = now - animStartTime;
+        const t = Math.min(elapsed / 300, 1);
+        const s = 1 - t;
+        for (const mesh of animMeshes) {
+          mesh.scale.set(s, s, s);
+        }
+        if (t >= 1) {
+          finishClearAnimation();
+        }
+      }
+
+      gameTick(now);
       controls.update();
       renderer.render(scene, camera);
     }
