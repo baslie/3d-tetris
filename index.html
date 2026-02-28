@@ -92,6 +92,55 @@
       user-select: none;
       z-index: 5;
     }
+    #touch-controls {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 8;
+      padding: 8px;
+      gap: 8px;
+      justify-content: space-between;
+      align-items: end;
+      pointer-events: none;
+    }
+    @media (pointer: coarse) {
+      #touch-controls { display: flex; }
+      #controls-help { display: none !important; }
+    }
+    .touch-group {
+      display: grid;
+      gap: 4px;
+      pointer-events: auto;
+    }
+    .touch-group.dpad {
+      grid-template-columns: repeat(3, 48px);
+      grid-template-rows: repeat(3, 48px);
+    }
+    .touch-group.actions {
+      grid-template-columns: repeat(2, 48px);
+      grid-template-rows: repeat(2, 48px);
+    }
+    .tbtn {
+      width: 48px;
+      height: 48px;
+      border: 1.5px solid rgba(74,158,255,0.5);
+      border-radius: 8px;
+      background: rgba(74,158,255,0.12);
+      color: rgba(255,255,255,0.7);
+      font-size: 18px;
+      font-family: sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .tbtn:active {
+      background: rgba(74,158,255,0.35);
+    }
   </style>
 </head>
 <body>
@@ -101,6 +150,7 @@
     <p>Стрелки — движение &nbsp; Q/E — поворот Y</p>
     <p>R/F — поворот X &nbsp; Пробел — сброс</p>
     <p>Shift — ускорение &nbsp; Esc — пауза</p>
+    <p id="start-hiscore" style="color:#4a9eff;margin-top:12px;font-size:16px"></p>
     <button class="overlay-btn" onclick="startGame()">СТАРТ</button>
   </div>
   <div id="pause-screen" class="overlay" style="display:none">
@@ -110,6 +160,7 @@
   <div id="gameover-screen" class="overlay" style="display:none">
     <h1>GAME OVER</h1>
     <p style="font-size:22px;color:#4a9eff;margin-bottom:4px">Счёт: <span id="final-score">0</span></p>
+    <p id="new-record" style="color:#ff4a4a;font-size:18px;display:none">🏆 НОВЫЙ РЕКОРД!</p>
     <button class="overlay-btn" onclick="resetGame()">ИГРАТЬ СНОВА</button>
   </div>
 
@@ -118,8 +169,28 @@
   <div id="score-panel" style="display:none">
     <div>SCORE: <span id="score-value">0</span></div>
     <div>LINES: <span id="lines-value">0</span></div>
+    <div>BEST: <span id="hiscore-value">0</span></div>
   </div>
   <canvas id="c"></canvas>
+  <div id="touch-controls">
+    <div class="touch-group dpad">
+      <div></div>
+      <div class="tbtn" data-act="up">↑</div>
+      <div></div>
+      <div class="tbtn" data-act="left">←</div>
+      <div class="tbtn" data-act="drop">⤓</div>
+      <div class="tbtn" data-act="right">→</div>
+      <div></div>
+      <div class="tbtn" data-act="down">↓</div>
+      <div></div>
+    </div>
+    <div class="touch-group actions">
+      <div class="tbtn" data-act="rotY">Q</div>
+      <div class="tbtn" data-act="rotY2">E</div>
+      <div class="tbtn" data-act="rotX">R</div>
+      <div class="tbtn" data-act="pause">⏸</div>
+    </div>
+  </div>
   <div id="controls-help" style="display:none">
     ← → ↑ ↓ — движение<br>
     Q / E — поворот Y<br>
@@ -146,6 +217,8 @@
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     // --- OrbitControls ---
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -180,9 +253,27 @@
     edges.position.set(3, 6, 3);
     scene.add(edges);
 
+    // --- Плоскость-приёмник теней ---
+    const groundGeo = new THREE.PlaneGeometry(6, 6);
+    const groundMat = new THREE.ShadowMaterial({ opacity: 0.3 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.set(3, 0.01, 3);
+    ground.receiveShadow = true;
+    scene.add(ground);
+
     // --- Освещение ---
     const dirLight = new THREE.DirectionalLight(0xffffff, 1);
     dirLight.position.set(5, 15, 5);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 30;
+    dirLight.shadow.camera.left = -8;
+    dirLight.shadow.camera.right = 8;
+    dirLight.shadow.camera.top = 15;
+    dirLight.shadow.camera.bottom = -2;
     scene.add(dirLight);
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -216,6 +307,7 @@
     // --- Состояние игры ---
     let gameState = 'start'; // 'start' | 'playing' | 'paused' | 'gameover'
     let ghostGroup = null;
+    let hiScore = parseInt(localStorage.getItem('tetris3d-hiscore')) || 0;
 
     // --- Состояние текущей фигуры ---
     let currentPiece = null;
@@ -233,6 +325,7 @@
         const geo = new THREE.BoxGeometry(1, 1, 1);
         const mat = new THREE.MeshLambertMaterial({ color: piece.color });
         const cube = new THREE.Mesh(geo, mat);
+        cube.castShadow = true;
         cube.position.set(dx, dy, dz);
         group.add(cube);
       });
@@ -376,11 +469,14 @@
 
     // --- Фиксация фигуры ---
     function lockPiece() {
+      sfxLand();
       getAbsBlocks(currentPiece, currentPosition).forEach(([x, y, z]) => {
         fieldGrid[x][y][z] = currentPiece.color;
         const geo = new THREE.BoxGeometry(1, 1, 1);
         const mat = new THREE.MeshLambertMaterial({ color: currentPiece.color });
         const cube = new THREE.Mesh(geo, mat);
+        cube.castShadow = true;
+        cube.receiveShadow = true;
         cube.position.set(x + 0.5, y + 0.5, z + 0.5);
         scene.add(cube);
         blockMeshes[x][y][z] = cube;
@@ -419,6 +515,7 @@
       dropInterval = 1000 * Math.pow(0.9, Math.floor(totalLines / 5));
       updateHUD();
 
+      sfxClear();
       // Запуск анимации уничтожения
       animating = true;
       animStartTime = performance.now();
@@ -505,6 +602,12 @@
     }
 
     // --- Управление состоянием игры ---
+    // Показать hi-score на стартовом экране
+    (function() {
+      const el = document.getElementById('start-hiscore');
+      if (hiScore > 0) el.textContent = 'Рекорд: ' + hiScore;
+    })();
+
     function startGame() {
       document.getElementById('start-screen').style.display = 'none';
       document.getElementById('preview').style.display = '';
@@ -532,9 +635,16 @@
     }
 
     function gameOver() {
+      sfxGameOver();
       if (ghostGroup) { scene.remove(ghostGroup); ghostGroup = null; }
       if (currentGroup) { scene.remove(currentGroup); currentGroup = null; }
       document.getElementById('final-score').textContent = score;
+      const isRecord = score > hiScore;
+      if (isRecord) {
+        hiScore = score;
+        localStorage.setItem('tetris3d-hiscore', hiScore);
+      }
+      document.getElementById('new-record').style.display = isRecord ? '' : 'none';
       document.getElementById('gameover-screen').style.display = '';
       gameState = 'gameover';
     }
@@ -568,17 +678,78 @@
     let animStartTime = 0;
     let animMeshes = [];
     let animClearedYs = [];
+    let smoothDrop = { active: false, fromY: 0, toY: 0, start: 0 };
+    const SMOOTH_DROP_MS = 100;
+    let hardDropTrail = { active: false, meshes: [], start: 0 };
+    const TRAIL_MS = 300;
+
+    // --- Звуковые эффекты (Web Audio API) ---
+    let audioCtx = null;
+    function ensureAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    }
+    function playTone(freq, duration, type, freqEnd) {
+      const ctx = ensureAudio();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type || 'square';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      if (freqEnd) osc.frequency.linearRampToValueAtTime(freqEnd, ctx.currentTime + duration);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    }
+    function sfxMove() { playTone(600, 0.04, 'square'); }
+    function sfxRotate() { playTone(800, 0.05, 'square'); }
+    function sfxLand() { playTone(150, 0.1, 'triangle'); }
+    function sfxHardDrop() { playTone(200, 0.15, 'sawtooth', 80); }
+    function sfxClear() { playTone(400, 0.25, 'sine', 1000); }
+    function sfxGameOver() { playTone(400, 0.6, 'sawtooth', 80); }
+
+    // --- Эффект hard drop ---
+    function spawnHardDropTrail(piece, fromY, toY, posX, posZ) {
+      hardDropTrail.meshes.forEach(m => scene.remove(m));
+      hardDropTrail.meshes = [];
+      const height = fromY - toY;
+      if (height <= 1) return;
+      piece.blocks.forEach(([dx, dy, dz]) => {
+        const geo = new THREE.BoxGeometry(0.3, height, 0.3);
+        const mat = new THREE.MeshBasicMaterial({ color: piece.color, transparent: true, opacity: 0.5 });
+        const trail = new THREE.Mesh(geo, mat);
+        trail.position.set(posX + dx + 0.5, toY + dy + 0.5 + height / 2, posZ + dz + 0.5);
+        scene.add(trail);
+        hardDropTrail.meshes.push(trail);
+      });
+      hardDropTrail.active = true;
+      hardDropTrail.start = performance.now();
+    }
 
     function updateHUD() {
       document.getElementById('score-value').textContent = score;
       document.getElementById('lines-value').textContent = totalLines;
+      document.getElementById('hiscore-value').textContent = hiScore;
     }
 
     function gameTick(now) {
       if (gameState !== 'playing' || animating || !currentPiece) return;
       const interval = softDrop ? dropInterval / 4 : dropInterval;
       if (now - lastDropTime >= interval) {
-        if (!tryMove(0, -1, 0)) lockPiece();
+        const np = { x: currentPosition.x, y: currentPosition.y - 1, z: currentPosition.z };
+        if (canPlace(currentPiece, np)) {
+          const oldY = currentPosition.y;
+          currentPosition = np;
+          smoothDrop = { active: true, fromY: oldY + 0.5, toY: np.y + 0.5, start: now };
+          if (currentGroup) {
+            currentGroup.position.set(currentPosition.x + 0.5, oldY + 0.5, currentPosition.z + 0.5);
+          }
+          renderGhost();
+        } else {
+          lockPiece();
+        }
         lastDropTime = now;
       }
     }
@@ -600,18 +771,22 @@
       // Игровые клавиши только в playing
       if (gameState !== 'playing' || animating || !currentPiece) return;
       switch (e.code) {
-        case 'ArrowLeft':  tryMove(-1, 0, 0); break;
-        case 'ArrowRight': tryMove(1, 0, 0); break;
-        case 'ArrowUp':    tryMove(0, 0, -1); break;
-        case 'ArrowDown':  tryMove(0, 0, 1); break;
-        case 'KeyQ': rotatePiece('y', 1); break;
-        case 'KeyE': rotatePiece('y', -1); break;
-        case 'KeyR': rotatePiece('x', 1); break;
-        case 'KeyF': rotatePiece('x', -1); break;
-        case 'Space':
+        case 'ArrowLeft':  if (tryMove(-1, 0, 0)) sfxMove(); break;
+        case 'ArrowRight': if (tryMove(1, 0, 0)) sfxMove(); break;
+        case 'ArrowUp':    if (tryMove(0, 0, -1)) sfxMove(); break;
+        case 'ArrowDown':  if (tryMove(0, 0, 1)) sfxMove(); break;
+        case 'KeyQ': rotatePiece('y', 1); sfxRotate(); break;
+        case 'KeyE': rotatePiece('y', -1); sfxRotate(); break;
+        case 'KeyR': rotatePiece('x', 1); sfxRotate(); break;
+        case 'KeyF': rotatePiece('x', -1); sfxRotate(); break;
+        case 'Space': {
+          const startY = currentPosition.y;
           while (tryMove(0, -1, 0)) {}
+          spawnHardDropTrail(currentPiece, startY, currentPosition.y, currentPosition.x, currentPosition.z);
+          sfxHardDrop();
           lockPiece();
           break;
+        }
         case 'ShiftLeft':
         case 'ShiftRight':
           softDrop = true;
@@ -622,6 +797,36 @@
 
     window.addEventListener('keyup', (e) => {
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') softDrop = false;
+    });
+
+    // --- Touch-контролы ---
+    document.getElementById('touch-controls').addEventListener('pointerdown', (e) => {
+      const act = e.target.dataset.act;
+      if (!act) return;
+      e.preventDefault();
+      if (act === 'pause') {
+        if (gameState === 'playing') pauseGame();
+        else if (gameState === 'paused') resumeGame();
+        return;
+      }
+      if (gameState !== 'playing' || animating || !currentPiece) return;
+      switch (act) {
+        case 'left':  if (tryMove(-1, 0, 0)) sfxMove(); break;
+        case 'right': if (tryMove(1, 0, 0)) sfxMove(); break;
+        case 'up':    if (tryMove(0, 0, -1)) sfxMove(); break;
+        case 'down':  if (tryMove(0, 0, 1)) sfxMove(); break;
+        case 'rotY':  rotatePiece('y', 1); sfxRotate(); break;
+        case 'rotY2': rotatePiece('y', -1); sfxRotate(); break;
+        case 'rotX':  rotatePiece('x', 1); sfxRotate(); break;
+        case 'drop': {
+          const startY = currentPosition.y;
+          while (tryMove(0, -1, 0)) {}
+          spawnHardDropTrail(currentPiece, startY, currentPosition.y, currentPosition.x, currentPosition.z);
+          sfxHardDrop();
+          lockPiece();
+          break;
+        }
+      }
     });
 
     // --- Resize ---
@@ -646,6 +851,28 @@
         if (t >= 1) {
           finishClearAnimation();
         }
+      }
+
+      // Анимация trail от hard drop
+      if (hardDropTrail.active) {
+        const t = Math.min((now - hardDropTrail.start) / TRAIL_MS, 1);
+        for (const m of hardDropTrail.meshes) {
+          m.material.opacity = 0.5 * (1 - t);
+          m.scale.x = 1 - t * 0.5;
+          m.scale.z = 1 - t * 0.5;
+        }
+        if (t >= 1) {
+          hardDropTrail.meshes.forEach(m => scene.remove(m));
+          hardDropTrail.meshes = [];
+          hardDropTrail.active = false;
+        }
+      }
+
+      // Плавное падение
+      if (smoothDrop.active && currentGroup) {
+        const t = Math.min((now - smoothDrop.start) / SMOOTH_DROP_MS, 1);
+        currentGroup.position.y = smoothDrop.fromY + (smoothDrop.toY - smoothDrop.fromY) * t;
+        if (t >= 1) smoothDrop.active = false;
       }
 
       gameTick(now);
