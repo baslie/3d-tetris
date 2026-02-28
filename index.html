@@ -8,9 +8,32 @@
     * { margin: 0; padding: 0; }
     html, body { overflow: hidden; width: 100%; height: 100%; }
     canvas { display: block; width: 100%; height: 100%; }
+    #preview {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 150px;
+      height: 150px;
+      border: 1px solid rgba(74, 158, 255, 0.3);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    #preview canvas { width: 100%; height: 100%; }
+    #preview-label {
+      position: absolute;
+      top: 165px;
+      right: 10px;
+      width: 150px;
+      text-align: center;
+      color: rgba(74, 158, 255, 0.7);
+      font-family: sans-serif;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
+  <div id="preview"><canvas id="preview-canvas"></canvas></div>
+  <div id="preview-label">NEXT</div>
   <canvas id="c"></canvas>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -70,6 +93,132 @@
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
+
+    // --- Игровое поле ---
+    const FIELD = { W: 6, H: 12, D: 6 };
+    const fieldGrid = [];
+    function initGrid() {
+      for (let x = 0; x < FIELD.W; x++) {
+        fieldGrid[x] = [];
+        for (let y = 0; y < FIELD.H; y++) {
+          fieldGrid[x][y] = [];
+          for (let z = 0; z < FIELD.D; z++) {
+            fieldGrid[x][y][z] = null;
+          }
+        }
+      }
+    }
+    initGrid();
+
+    // --- Фигуры ---
+    const PIECES = [
+      { blocks: [[0,0,0],[1,0,0],[2,0,0],[3,0,0]], color: 0x00f0f0 }, // I
+      { blocks: [[0,0,0],[1,0,0],[2,0,0],[2,0,1]], color: 0xf0a000 }, // L
+      { blocks: [[0,0,0],[1,0,0],[2,0,0],[1,0,1]], color: 0xa000f0 }, // T
+      { blocks: [[0,0,0],[1,0,0],[1,0,1],[2,0,1]], color: 0x00f000 }, // S
+      { blocks: [[0,0,0],[1,0,0],[0,0,1],[1,0,1]], color: 0xf0f000 }, // O
+    ];
+
+    // --- Состояние текущей фигуры ---
+    let currentPiece = null;
+    let currentPosition = { x: 0, y: 0, z: 0 };
+    let currentGroup = null;
+    let nextPiece = null;
+
+    function randomPiece() {
+      return PIECES[Math.floor(Math.random() * PIECES.length)];
+    }
+
+    function createPieceMesh(piece) {
+      const group = new THREE.Group();
+      piece.blocks.forEach(([dx, dy, dz]) => {
+        const geo = new THREE.BoxGeometry(1, 1, 1);
+        const mat = new THREE.MeshLambertMaterial({ color: piece.color });
+        const cube = new THREE.Mesh(geo, mat);
+        cube.position.set(dx, dy, dz);
+        group.add(cube);
+      });
+      return group;
+    }
+
+    function getPieceBounds(piece) {
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
+      let minZ = Infinity, maxZ = -Infinity;
+      piece.blocks.forEach(([dx, dy, dz]) => {
+        minX = Math.min(minX, dx); maxX = Math.max(maxX, dx);
+        minY = Math.min(minY, dy); maxY = Math.max(maxY, dy);
+        minZ = Math.min(minZ, dz); maxZ = Math.max(maxZ, dz);
+      });
+      return { minX, maxX, minY, maxY, minZ, maxZ,
+        w: maxX - minX + 1, h: maxY - minY + 1, d: maxZ - minZ + 1 };
+    }
+
+    function renderCurrentPiece() {
+      if (currentGroup) scene.remove(currentGroup);
+      if (!currentPiece) return;
+      currentGroup = createPieceMesh(currentPiece);
+      currentGroup.position.set(
+        currentPosition.x + 0.5,
+        currentPosition.y + 0.5,
+        currentPosition.z + 0.5
+      );
+      scene.add(currentGroup);
+    }
+
+    // --- Превью следующей фигуры ---
+    const previewCanvas = document.getElementById('preview-canvas');
+    previewCanvas.width = 150;
+    previewCanvas.height = 150;
+    const previewRenderer = new THREE.WebGLRenderer({ canvas: previewCanvas, antialias: true });
+    previewRenderer.setSize(150, 150);
+    previewRenderer.setClearColor(0x1a1a2e);
+
+    const previewScene = new THREE.Scene();
+    const previewCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 50);
+    previewCamera.position.set(3, 3, 3);
+    previewCamera.lookAt(0, 0, 0);
+
+    const previewAmbient = new THREE.AmbientLight(0xffffff, 0.6);
+    previewScene.add(previewAmbient);
+    const previewDir = new THREE.DirectionalLight(0xffffff, 0.8);
+    previewDir.position.set(3, 5, 3);
+    previewScene.add(previewDir);
+
+    function renderNextPreview() {
+      // Очистить старые меши
+      while (previewScene.children.length > 2) {
+        previewScene.remove(previewScene.children[previewScene.children.length - 1]);
+      }
+      if (!nextPiece) return;
+      const mesh = createPieceMesh(nextPiece);
+      // Центрировать фигуру вокруг origin
+      const bounds = getPieceBounds(nextPiece);
+      mesh.position.set(
+        -(bounds.minX + bounds.maxX) / 2,
+        -(bounds.minY + bounds.maxY) / 2,
+        -(bounds.minZ + bounds.maxZ) / 2
+      );
+      previewScene.add(mesh);
+      previewRenderer.render(previewScene, previewCamera);
+    }
+
+    // --- Спавн фигуры ---
+    function spawnPiece() {
+      currentPiece = nextPiece || randomPiece();
+      nextPiece = randomPiece();
+      // Не давать две одинаковые подряд
+      while (nextPiece === currentPiece) {
+        nextPiece = randomPiece();
+      }
+      const bounds = getPieceBounds(currentPiece);
+      currentPosition.x = Math.floor((FIELD.W - bounds.w) / 2);
+      currentPosition.z = Math.floor((FIELD.D - bounds.d) / 2);
+      currentPosition.y = FIELD.H - bounds.h;
+      renderCurrentPiece();
+      renderNextPreview();
+    }
+    spawnPiece();
 
     // --- Resize ---
     window.addEventListener('resize', () => {
