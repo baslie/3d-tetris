@@ -1,0 +1,14 @@
+{
+  "name": "3d-tetris",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.183.2",
+    "vite": "^7.3.1"
+  }
+}
