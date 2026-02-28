@@ -220,6 +220,116 @@
     }
     spawnPiece();
 
+    // --- Хранилище мешей зафиксированных блоков ---
+    const blockMeshes = [];
+    for (let x = 0; x < FIELD.W; x++) {
+      blockMeshes[x] = [];
+      for (let y = 0; y < FIELD.H; y++) {
+        blockMeshes[x][y] = [];
+        for (let z = 0; z < FIELD.D; z++) blockMeshes[x][y][z] = null;
+      }
+    }
+
+    // --- Коллизии ---
+    function getAbsBlocks(piece, pos) {
+      return piece.blocks.map(([dx, dy, dz]) => [pos.x + dx, pos.y + dy, pos.z + dz]);
+    }
+
+    function canPlace(piece, pos) {
+      return getAbsBlocks(piece, pos).every(([x, y, z]) =>
+        x >= 0 && x < FIELD.W &&
+        y >= 0 && y < FIELD.H &&
+        z >= 0 && z < FIELD.D &&
+        fieldGrid[x][y][z] === null
+      );
+    }
+
+    // --- Движение ---
+    function tryMove(dx, dy, dz) {
+      const np = { x: currentPosition.x + dx, y: currentPosition.y + dy, z: currentPosition.z + dz };
+      if (canPlace(currentPiece, np)) {
+        currentPosition = np;
+        renderCurrentPiece();
+        return true;
+      }
+      return false;
+    }
+
+    // --- Вращение ---
+    function rotatePiece(axis, dir) {
+      const rotated = currentPiece.blocks.map(([x, y, z]) => {
+        if (axis === 'y') return dir > 0 ? [-z, y, x] : [z, y, -x];
+        return dir > 0 ? [x, -z, y] : [x, z, -y];
+      });
+      let mnX = Infinity, mnY = Infinity, mnZ = Infinity;
+      rotated.forEach(([x, y, z]) => { mnX = Math.min(mnX, x); mnY = Math.min(mnY, y); mnZ = Math.min(mnZ, z); });
+      const norm = rotated.map(([x, y, z]) => [x - mnX, y - mnY, z - mnZ]);
+      const test = { blocks: norm, color: currentPiece.color };
+      if (canPlace(test, currentPosition)) {
+        currentPiece = test;
+        renderCurrentPiece();
+      }
+    }
+
+    // --- Фиксация фигуры ---
+    function lockPiece() {
+      getAbsBlocks(currentPiece, currentPosition).forEach(([x, y, z]) => {
+        fieldGrid[x][y][z] = currentPiece.color;
+        const geo = new THREE.BoxGeometry(1, 1, 1);
+        const mat = new THREE.MeshLambertMaterial({ color: currentPiece.color });
+        const cube = new THREE.Mesh(geo, mat);
+        cube.position.set(x + 0.5, y + 0.5, z + 0.5);
+        scene.add(cube);
+        blockMeshes[x][y][z] = cube;
+      });
+      if (currentGroup) scene.remove(currentGroup);
+      currentGroup = null;
+      currentPiece = null;
+      spawnPiece();
+    }
+
+    // --- Игровой цикл ---
+    let dropInterval = 1000;
+    let lastDropTime = performance.now();
+    let softDrop = false;
+
+    function gameTick(now) {
+      if (!currentPiece) return;
+      const interval = softDrop ? dropInterval / 4 : dropInterval;
+      if (now - lastDropTime >= interval) {
+        if (!tryMove(0, -1, 0)) lockPiece();
+        lastDropTime = now;
+      }
+    }
+
+    // --- Управление клавиатурой ---
+    window.addEventListener('keydown', (e) => {
+      if (!currentPiece) return;
+      switch (e.code) {
+        case 'ArrowLeft':  tryMove(-1, 0, 0); break;
+        case 'ArrowRight': tryMove(1, 0, 0); break;
+        case 'ArrowUp':    tryMove(0, 0, -1); break;
+        case 'ArrowDown':  tryMove(0, 0, 1); break;
+        case 'KeyQ': rotatePiece('y', 1); break;
+        case 'KeyE': rotatePiece('y', -1); break;
+        case 'KeyR': rotatePiece('x', 1); break;
+        case 'KeyF': rotatePiece('x', -1); break;
+        case 'Space':
+          while (tryMove(0, -1, 0)) {}
+          lockPiece();
+          break;
+        case 'ShiftLeft':
+        case 'ShiftRight':
+          softDrop = true;
+          break;
+      }
+      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') softDrop = false;
+    });
+
     // --- Resize ---
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
@@ -228,7 +338,8 @@
     });
 
     // --- Animation loop ---
-    function animate() {
+    function animate(time) {
+      gameTick(time || performance.now());
       controls.update();
       renderer.render(scene, camera);
     }
